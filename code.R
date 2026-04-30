@@ -14,11 +14,21 @@ a1c <- read_xpt("GHB_L.xpt")
 demo <- read_xpt("DEMO_L.xpt")
 
 # merge datasets
-nhanes <- merge(merge(a1c, demo, by = "SEQN", all = TRUE),
-                demo, by = "SEQN", all = TRUE)
+nhanes <- merge(a1c, demo, by = "SEQN", all = TRUE)
 nhanes_dt <- setDT(nhanes)
 View(nhanes_dt)
-# Create average BP
 
-# Limit the dataset to 12+ years old because HbA1c is measured 12+ years
-nhanes_dt <- nhanes_dt[RIDAGEYR >= 12]
+# Limit the dataset to 12+ years old because HbA1c is measured 12+ years and complete obs of A1c
+nhanes_dt <- nhanes_dt[RIDAGEYR >= 12 & !is.na(LBXGH)]
+summary(nhanes_dt$LBXGH)
+
+### Prior predictive check
+
+### JAGS model 
+
+### Posterior predictive check
+
+### MCMC Diagnostics 
+
+
+
