@@ -20,12 +20,11 @@ library(dplyr)
 library(ggplot2)
 library(tidyverse)
 library(rjags)
-# library(rethinking)
+library(rethinking)
 library(coda)
 ```
 
-# Data Preparation and cleaning
-
+Data Preparation and cleaning
 Datasets are downloaded from website below. 
 https://wwwn.cdc.gov/nchs/nhanes/continuousnhanes/default.aspx?Cycle=2021-2023
 
@@ -37,36 +36,73 @@ demo <- read_xpt("DEMO_L.xpt")
 
 # merge datasets
 nhanes <- merge(a1c, demo, by = "SEQN", all = TRUE)
-nhanes_dt <- setDT(nhanes)
-View(nhanes_dt)
+d <- setDT(nhanes)
 
 # Limit the dataset to 12+ years old because HbA1c is measured 12+ years and complete obs of A1c
-nhanes_dt <- nhanes_dt[RIDAGEYR >= 12 & !is.na(LBXGH)]
-summary(nhanes_dt$LBXGH)
+d <- d[RIDAGEYR >= 12 & !is.na(LBXGH)]
+summary(d$LBXGH)
+
+# Create dummy variable for male
+d$male <- ifelse(d$RIAGENDR == 1, 1, 0)
 ```
 
-# Prior predictive check
-
-We will apply Bayesian multiple linear regression to predict posterior distribution of HbA1c and simulate results using the posterior predictive distribution. Outcome variable would be HbA1c as continuous variable (%) and predictor variables would be age as continuous variable (years) and sex as categorical variable. We will center age ($x_i$) and create dummy variable for sex: male ($m_i$). We will also include interaction term between age (years) and $m_i$.
-
-Linear Model we will fit: 
-
-$$\mu_i = \beta_0 + \beta_1 (x_i -\bar{x}) + \beta_2 m_i + \beta_3 (m_i (x_i -\bar{x}))$$
-
-
-Prior: Our prior for average HbA1c level in the population is below 5.7%. 
-- $\beta_0 \sim \mathcal{Normal}(5.5,1)$: Intercept for women
-- $\beta_1 \sim \mathcal{Normal}(0,0.05)$: Women’s slope
-- $\beta_2 \sim \mathcal{Normal}(0,0.05)$: Intercept difference
-- $\beta_3 \sim \mathcal{Normal}(0,0.05)$: Slope difference
-
-
+Prior predictive check
 ```{r Prior predictive check}
-
+xbar <- mean(d$LBXGH)
+x_centered <- d$LBXGH - xbar
+x_range <- range(x_centered)
 ```
 
-# JAGS model 
+JAGS model 
 ```{r JAGS model}
+model_code_interaction <- "model{
+  # --- LIKELIHOOD ---
+  for(i in 1:n){
+    y[i] ~ dnorm(mu[i], tau) 
+    
+    # Linear predictor with interaction
+    mu[i] <- beta0 + beta1 * (x[i] - xbar) + beta2 * m[i] + beta3 * m[i] * (x[i] - xbar)
+    
+    # Posterior Predictive
+    ynew[i] ~ dnorm(mu[i], tau)
+  }
+ 
+  # --- PRIORS ---
+  sigma ~ dunif(0, 50)
+  tau    <- pow(sigma, -2)
+  
+  # Note: JAGS dnorm uses Precisions = 1/Variance
+  beta0 ~ dnorm(5.5, pow(1, -2))
+  beta1 ~ dnorm(0, pow(0.05, -2))
+  beta2 ~ dnorm(0, pow(0.05, -2))
+  beta3 ~ dnorm(0, pow(0.05, -2))
+  
+  # Generated Quantities: Calculate Men-specific parameters directly inside JAGS
+  beta0_m <- beta0 + beta2
+  beta1_m <- beta1 + beta3
+}"
+
+data_list_int <- list(
+  y = d$LBXGH, 
+  x = d$RIDAGEYR, 
+  m = d$male, 
+  xbar = xbar, 
+  n = n_obs
+)
+
+m4 <- jags.model(textConnection(model_code_interaction), data = data_list_int, quiet = TRUE)
+
+samples_int <- coda.samples(
+  m4, 
+  variable.names = c("beta0", "beta1", "beta2", "beta3", "beta0_m", "beta1_m", "sigma"), 
+  n.iter = 10000
+)
+
+samps_int_df <- as.data.frame(samples_int[[1]])
+
+# Display summary of all beta coefficients
+precis(samps_int_df, prob = 0.95, digits = 2)
+
 
 ```
 
