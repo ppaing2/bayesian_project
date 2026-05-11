@@ -47,6 +47,19 @@ d$male <- ifelse(d$RIAGENDR == 1, 1, 0)
 ```
 
 Prior predictive check
+We will apply Bayesian multiple linear regression to predict posterior distribution of HbA1c and simulate results using the posterior predictive distribution. Outcome variable would be HbA1c as continuous variable (%) and predictor variables would be age as continuous variable (years) and sex as categorical variable. We will center age ($x_i$) and create dummy variable for sex: male ($m_i$). We will also include interaction term between age (years) and $m_i$.
+
+Linear Model we will fit: 
+
+$$\mu_i = \beta_0 + \beta_1 (x_i -\bar{x}) + \beta_2 m_i + \beta_3 (m_i (x_i -\bar{x}))$$
+
+
+Prior: Our prior for average HbA1c level in the population is below 5.7%. 
+- $\beta_0 \sim \mathcal{Normal}(5.5,1)$: Intercept for women
+- $\beta_1 \sim \mathcal{Normal}(0,0.05)$: Women’s slope
+- $\beta_2 \sim \mathcal{Normal}(0,0.05)$: Intercept difference
+- $\beta_3 \sim \mathcal{Normal}(0,0.05)$: Slope difference
+
 ```{r Prior predictive check}
 xbar <- mean(d$LBXGH)
 x_centered <- d$LBXGH - xbar
