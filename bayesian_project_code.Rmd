@@ -22,6 +22,8 @@ library(tidyverse)
 library(rjags)
 library(rethinking)
 library(coda)
+
+set.seed(123)
 ```
 
 Data Preparation and cleaning
@@ -61,9 +63,49 @@ Prior: Our prior for average HbA1c level in the population is below 5.7%.
 - $\beta_3 \sim \mathcal{Normal}(0,0.05)$: Slope difference
 
 ```{r Prior predictive check}
+n_obs <- nrow(d)
 xbar <- mean(d$LBXGH)
 x_centered <- d$LBXGH - xbar
 x_range <- range(x_centered)
+
+
+# Number of simulations
+nsim <- 200
+
+# 1. Simulate parameters from our priors
+beta0_prior <- rnorm(nsim, mean = 5.5, sd = 1)
+beta1_prior <- rnorm(nsim, mean = 0, sd = 0.05)
+beta2_prior <- rnorm(nsim, mean = 0, sd = 0.05)
+beta3_prior <- rnorm(nsim, mean = 0, sd = 0.05)
+sigma_prior <- runif(nsim, min = 0, max = 0.1) # we have not discussed sigma yet
+
+# 3. Simulate full datasets from the prior (one dataset per draw)
+ynew <- matrix(nrow = n_obs, ncol = nsim)
+
+for(j in 1:nsim) {
+  ynew[, j] <- rnorm(n_obs, mean = beta0_prior[j] + beta1_prior[j] * x_centered + beta2_prior[j]* d$male + beta3_prior[j]*d$male*x_centered, sd = sigma_prior[j])
+}
+
+ynew_df <- as.data.frame(ynew)
+ynew_df$id <- 1:nrow(ynew_df)
+ynew_long <- reshape(ynew_df, direction = "long", idvar = "id",
+                     varying = list(1:nsim), timevar = "simulation",
+                     v.names = "HbA1c", times = 1:nsim)
+rownames(ynew_long) <- NULL
+
+
+# 3. Visualize the Prior Predictive Distribution
+# Plot the predictive check
+ggplot() +
+  # 200 simulated datasets
+  geom_line(data = ynew_long, aes(x = HbA1c, group = simulation), stat = "density", color = "lightblue", alpha = 0.9) +
+  # Actual observed data
+  geom_density(data = d, aes(x = LBXGH), color = "black", linewidth = 1.2) +
+  coord_cartesian(ylim = c(0, 0.7))+
+  theme_minimal() +
+  labs(title = "Prior Predictive Check: Intercept-Only Model",
+       subtitle = "Black line = Actual Data | Blue lines = Simulated Datasets",
+       x = "HbA1c", y = "Density")
 ```
 
 JAGS model 
