@@ -20,7 +20,7 @@ library(dplyr)
 library(ggplot2)
 library(tidyverse)
 library(rjags)
-library(rethinking)
+# library(rethinking)
 library(coda)
 
 set.seed(123)
@@ -96,6 +96,18 @@ rownames(ynew_long) <- NULL
 
 # 3. Visualize the Prior Predictive Distribution
 # Plot the predictive check
+plot(NULL, xlim = x_range, ylim = c(0,20),
+     xlab = "Centered Age", ylab = "HbA1C",
+     main = "Implied Prior Regression Lines")
+
+# for (i in 1:nsim){
+#   curve(beta0_prior[i] + beta1_prior[i] * x + beta2_prior[i]* d$male + beta3_prior[i]*d$male*x,
+#         from = x_range[1], to = x_range[2],
+#         add = TRUE, col = adjustcolor("black", alpha.f = 0.2))
+#   
+# }
+
+
 ggplot() +
   # 200 simulated datasets
   geom_line(data = ynew_long, aes(x = HbA1c, group = simulation), stat = "density", color = "lightblue", alpha = 0.9) +
