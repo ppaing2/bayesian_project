@@ -226,7 +226,6 @@ dim(samples_pred$ynew)
 ynew_array <- samples_pred$ynew
 
 # Combine iterations across chains
-# Result: rows = individuals, columns = posterior predictive draws
 ynew_mat <- do.call(
   cbind,
   lapply(1:dim(ynew_array)[3], function(ch) ynew_array[, , ch])
@@ -243,7 +242,7 @@ mu_mat <- do.call(
 dim(ynew_mat)
 dim(mu_mat)
 
-## 2. Density overlay PPC
+## 2. Density overlay PPC   ## Lecture 12
 set.seed(123)
 
 # Number of posterior predictive datasets to show
@@ -284,7 +283,7 @@ for (s in idx) {
   }
 }
 
-# Add observed density again on top
+# Add observed density
 lines(density(d$LBXGH), col = "black", lwd = 2)
 
 legend(
@@ -344,7 +343,7 @@ ppc_table <- data.frame(
 ppc_table %>%
   mutate(across(where(is.numeric), ~ round(.x, 3)))
 
-# Check whether posterior predictive draws produce impossible HbA1c values
+# Check posterior predictive draws for HbA1c values
 rep_negative <- apply(ynew_mat, 2, function(x) mean(x < 0))
 rep_extreme_high <- apply(ynew_mat, 2, function(x) mean(x > 18))
 
