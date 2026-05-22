@@ -180,6 +180,146 @@ precis(samps_int_df, prob = 0.95, digits = 2)
 Posterior predictive check
 ```{r Posterior predictive check}
 
+# Draw posterior predictive samples from the fitted JAGS model
+samples_pred <- jags.samples(
+  model = m4,
+  variable.names = c("ynew", "mu"),
+  n.iter = 1000
+)
+
+# Check dimensions
+dim(samples_pred$ynew)
+
+# Extract posterior predictive array
+ynew_array <- samples_pred$ynew
+
+# Combine iterations across chains
+ynew_mat <- do.call(
+  cbind,
+  lapply(1:dim(ynew_array)[3], function(ch) ynew_array[, , ch])
+)
+
+# Extract posterior mean array if needed later
+mu_array <- samples_pred$mu
+mu_mat <- do.call(
+  cbind,
+  lapply(1:dim(mu_array)[3], function(ch) mu_array[, , ch])
+)
+
+# Check final dimensions
+dim(ynew_mat)
+dim(mu_mat)
+
+## 2. Density overlay PPC   ## Lecture 12
+set.seed(123)
+
+# Number of posterior predictive datasets to show
+n_show <- 100
+idx <- sample(1:ncol(ynew_mat), n_show)
+
+# Observed HbA1c density
+plot(
+  density(d$LBXGH),
+  col = "black",
+  lwd = 2,
+  xlab = "HbA1c (%)",
+  ylab = "Density",
+  main = "Posterior Predictive Check: HbA1c Distribution",
+  xlim = c(3, 18),
+  ylim = c(0, 1)
+)
+
+# Overlay posterior predictive densities
+for (s in idx) {
+  y_rep <- ynew_mat[, s]
+  y_rep <- y_rep[is.finite(y_rep)]
+ 
+  # Defensive coding: skip if no variation
+  if (length(unique(y_rep)) < 2) next
+ 
+  dens <- tryCatch(
+    density(y_rep),
+    error = function(e) NULL
+  )
+ 
+  if (!is.null(dens)) {
+    lines(
+      dens,
+      col = adjustcolor("skyblue", alpha.f = 0.12),
+      lwd = 1
+    )
+  }
+}
+
+# Add observed density
+lines(density(d$LBXGH), col = "black", lwd = 2)
+
+legend(
+  "topright",
+  legend = c("Observed HbA1c", "Posterior predictive draws"),
+  col = c("black", adjustcolor("skyblue", alpha.f = 0.6)),
+  lwd = c(2, 1),
+  bty = "n"
+)
+
+# Observed summary statistics
+obs_mean <- mean(d$LBXGH)
+obs_sd <- sd(d$LBXGH)
+obs_above57 <- mean(d$LBXGH >= 5.7)
+obs_above65 <- mean(d$LBXGH >= 6.5)
+
+# Posterior predictive summary statistics
+rep_means <- apply(ynew_mat, 2, mean)
+rep_sds <- apply(ynew_mat, 2, sd)
+rep_above57 <- apply(ynew_mat, 2, function(x) mean(x >= 5.7))
+rep_above65 <- apply(ynew_mat, 2, function(x) mean(x >= 6.5))
+
+# Create summary table
+ppc_table <- data.frame(
+  Statistic = c(
+    "Mean HbA1c",
+    "SD HbA1c",
+    "Proportion HbA1c >= 5.7%",
+    "Proportion HbA1c >= 6.5%"
+  ),
+  Observed = c(
+    obs_mean,
+    obs_sd,
+    obs_above57,
+    obs_above65
+  ),
+  PPC_lower_2.5 = c(
+    quantile(rep_means, 0.025),
+    quantile(rep_sds, 0.025),
+    quantile(rep_above57, 0.025),
+    quantile(rep_above65, 0.025)
+  ),
+  PPC_median = c(
+    quantile(rep_means, 0.5),
+    quantile(rep_sds, 0.5),
+    quantile(rep_above57, 0.5),
+    quantile(rep_above65, 0.5)
+  ),
+  PPC_upper_97.5 = c(
+    quantile(rep_means, 0.975),
+    quantile(rep_sds, 0.975),
+    quantile(rep_above57, 0.975),
+    quantile(rep_above65, 0.975)
+  )
+)
+
+ppc_table %>%
+  mutate(across(where(is.numeric), ~ round(.x, 3)))
+
+# Check posterior predictive draws for HbA1c values
+rep_negative <- apply(ynew_mat, 2, function(x) mean(x < 0))
+rep_extreme_high <- apply(ynew_mat, 2, function(x) mean(x > 18))
+
+cat("Average posterior predictive proportion with HbA1c < 0:",
+    round(mean(rep_negative), 5), "\n")
+
+cat("Average posterior predictive proportion with HbA1c > 18:",
+    round(mean(rep_extreme_high), 5), "\n")
 ```
 
 MCMC Diagnostics 
