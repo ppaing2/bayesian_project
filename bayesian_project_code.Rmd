@@ -57,15 +57,15 @@ $$\mu_i = \beta_0 + \beta_1 (x_i -\bar{x}) + \beta_2 m_i + \beta_3 (m_i (x_i -\b
 
 
 Prior: Our prior for average HbA1c level in the population is below 5.7%. 
-- $\beta_0 \sim \mathcal{Normal}(5.5,1)$: Intercept for women
-- $\beta_1 \sim \mathcal{Normal}(0,0.05)$: Women’s slope
-- $\beta_2 \sim \mathcal{Normal}(0,0.05)$: Intercept difference
+- $\beta_0 \sim \mathcal{Normal}(5.5,0.5)$: Intercept for women
+- $\beta_1 \sim \mathcal{Normal}(0.01,0.05)$: Women’s slope
+- $\beta_2 \sim \mathcal{Normal}(0.11,0.05)$: Intercept difference
 - $\beta_3 \sim \mathcal{Normal}(0,0.05)$: Slope difference
 
 ```{r Prior predictive check}
 n_obs <- nrow(d)
-xbar <- mean(d$LBXGH)
-x_centered <- d$LBXGH - xbar
+xbar <- mean(d$RIDAGEYR)
+x_centered <- d$RIDAGEYR - xbar
 x_range <- range(x_centered)
 
 
@@ -73,9 +73,9 @@ x_range <- range(x_centered)
 nsim <- 200
 
 # 1. Simulate parameters from our priors
-beta0_prior <- rnorm(nsim, mean = 5.5, sd = 1)
-beta1_prior <- rnorm(nsim, mean = 0, sd = 0.05)
-beta2_prior <- rnorm(nsim, mean = 0, sd = 0.05)
+beta0_prior <- rnorm(nsim, mean = 5.5, sd = 0.5)
+beta1_prior <- rnorm(nsim, mean = 0.01, sd = 0.05)
+beta2_prior <- rnorm(nsim, mean = 0.11, sd = 0.05)
 beta3_prior <- rnorm(nsim, mean = 0, sd = 0.05)
 sigma_prior <- runif(nsim, min = 0, max = 0.1) # we have not discussed sigma yet
 
@@ -135,13 +135,13 @@ model_code_interaction <- "model{
   }
  
   # --- PRIORS ---
-  sigma ~ dunif(0, 50)
+  sigma ~ dunif(0, 0.1)
   tau    <- pow(sigma, -2)
   
   # Note: JAGS dnorm uses Precisions = 1/Variance
-  beta0 ~ dnorm(5.5, pow(1, -2))
-  beta1 ~ dnorm(0, pow(0.05, -2))
-  beta2 ~ dnorm(0, pow(0.05, -2))
+  beta0 ~ dnorm(5.5, pow(0.5, -2))
+  beta1 ~ dnorm(0.01, pow(0.05, -2))
+  beta2 ~ dnorm(0.11, pow(0.05, -2))
   beta3 ~ dnorm(0, pow(0.05, -2))
   
   # Generated Quantities: Calculate Men-specific parameters directly inside JAGS
@@ -157,7 +157,10 @@ data_list_int <- list(
   n = n_obs
 )
 
-m4 <- jags.model(textConnection(model_code_interaction), data = data_list_int, quiet = TRUE)
+m4 <- jags.model(textConnection(model_code_interaction), 
+                 data = data_list_int, 
+                 n.chains = 3,
+                 quiet = TRUE)
 
 samples_int <- coda.samples(
   m4, 
@@ -181,5 +184,15 @@ Posterior predictive check
 
 MCMC Diagnostics 
 ```{r MCMC Diagnositcs}
+# Trace plots
+plot(samples_int, density = FALSE, main = "")
 
+# Gelman-Rubin diagnostic: R-hat
+gelman.diag(samples_int)$psrf
+
+# Effective sample size
+effectiveSize(samples_int)
+
+# Optional: autocorrelation plots
+autocorr.plot(samples_int)
 ```
