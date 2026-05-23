@@ -148,13 +148,13 @@ model_code_interaction <- "model{
   }
  
   # --- PRIORS ---
-  sigma ~ dunif(0, 50)
+  sigma ~ dunif(0, 0.1)
   tau    <- pow(sigma, -2)
   
   # Note: JAGS dnorm uses Precisions = 1/Variance
-  beta0 ~ dnorm(5.5, pow(1, -2))
-  beta1 ~ dnorm(0, pow(0.05, -2))
-  beta2 ~ dnorm(0, pow(0.05, -2))
+  beta0 ~ dnorm(5.5, pow(0.5, -2))
+  beta1 ~ dnorm(0.01, pow(0.05, -2))
+  beta2 ~ dnorm(0.11, pow(0.05, -2))
   beta3 ~ dnorm(0, pow(0.05, -2))
   
   # Generated Quantities: Calculate Men-specific parameters directly inside JAGS
@@ -170,36 +170,21 @@ data_list_int <- list(
   n = n_obs
 )
 
-m4 <- jags.model(
-  textConnection(model_code_interaction),
-  data = data_list_int,
-  n.chains = 3,
-  n.adapt = 1000,
-  quiet = TRUE
-)
+m4 <- jags.model(textConnection(model_code_interaction), 
+                 data = data_list_int, 
+                 n.chains = 3,
+                 quiet = TRUE)
 
-# Burn-in
-update(m4, n.iter = 2000)
-
-# Draw posterior samples
 samples_int <- coda.samples(
-  model = m4,
-  variable.names = c("beta0", "beta1", "beta2", "beta3",
-                     "beta0_m", "beta1_m", "sigma"),
+  m4, 
+  variable.names = c("beta0", "beta1", "beta2", "beta3", "beta0_m", "beta1_m", "sigma"), 
   n.iter = 10000
 )
 
 samps_int_df <- as.data.frame(samples_int[[1]])
 
-summary(samples_int)
-posterior_summary <- data.frame(
-  mean = apply(samps_int_df, 2, mean),
-  sd = apply(samps_int_df, 2, sd),
-  q2.5 = apply(samps_int_df, 2, quantile, probs = 0.025),
-  q97.5 = apply(samps_int_df, 2, quantile, probs = 0.975)
-)
-
-round(posterior_summary, 2)
+# Display summary of all beta coefficients
+precis(samps_int_df, prob = 0.95, digits = 2)
 
 ```
 
@@ -209,7 +194,16 @@ MCMC Diagnostics
 plot(samples_int, density = FALSE, main = "")
 
 # Gelman-Rubin diagnostic: R-hat
-gelman.diag(samples_int)$psrf
+# remove columns with NA or no variation
+samples_mat <- as.matrix(samples_int)
+
+keep <- apply(samples_mat, 2, function(x) {
+  all(is.finite(x)) && sd(x) > 0
+})
+
+samples_clean <- samples_int[, keep]
+
+gelman.diag(samples_clean, autoburnin = FALSE, multivariate = FALSE)$psrf
 
 # Effective sample size
 effectiveSize(samples_int)
