@@ -14,13 +14,26 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r set up}
 ## Load libraries 
+install.packages("remotes")
+remotes::install_github("rmcelreath/rethinking")
+
+install.packages("posterior")
+install.packages("cmdstanr", repos = c("https://mc-stan.org/r-packages/", getOption("repos")))
+cmdstanr::check_cmdstan_toolchain(fix = TRUE)
+
+cmdstanr::check_cmdstan_toolchain()
+cmdstanr::install_cmdstan()
+
+remotes::install_github("rmcelreath/rethinking", dependencies = TRUE)
+library(rethinking)
+
 library(haven)
 library(data.table)
 library(dplyr)
 library(ggplot2)
 library(tidyverse)
 library(rjags)
-# library(rethinking)
+library(rethinking)
 library(coda)
 
 set.seed(123)
