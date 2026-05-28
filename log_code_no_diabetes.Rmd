@@ -1,0 +1,378 @@
+---
+title: "Bayesian Project - Code for log HbA1c among those without self-reported diabetes diagnosis"
+author: "Satoshi Koiso, Zaw Wai Yan Bo, Pyone Yadanar Paing"
+date: "2026-05-08"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+
+```{r set up}
+## Load libraries 
+library(haven)
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(rjags)
+# library(rethinking)
+library(coda)
+
+set.seed(123)
+```
+
+Data Preparation and cleaning
+Datasets are downloaded from website below. 
+https://wwwn.cdc.gov/nchs/nhanes/continuousnhanes/default.aspx?Cycle=2021-2023
+
+
+```{r Data Cleaning}
+## Read datasets
+a1c <- read_xpt("GHB_L.xpt")
+demo <- read_xpt("DEMO_L.xpt")
+diq <- read_xpt("DIQ_L.xpt")
+
+# merge datasets
+nhanes <- merge(a1c, demo, by = "SEQN", all = TRUE)
+nhanes <- merge(nhanes, diq, by = "SEQN", all = TRUE)
+
+d <- setDT(nhanes)
+
+# Limit the dataset to 12+ years old because HbA1c is measured 12+ years and complete obs of A1c
+d <- d[RIDAGEYR >= 12 & !is.na(LBXGH) & DIQ010 != 1]
+summary(d$LBXGH)
+
+# Create dummy variable for male
+d$male <- ifelse(d$RIAGENDR == 1, 1, 0)
+
+# Create diabetes 
+d$sr_diabetes <- ifelse(d$DIQ010 == 1, 1, 0)
+```
+
+Prior predictive check
+We will apply Bayesian multiple linear regression to predict posterior distribution of HbA1c and simulate results using the posterior predictive distribution. Outcome variable would be HbA1c as continuous variable (%) and predictor variables would be age as continuous variable (years) and sex as categorical variable. We will center age ($x_i$) and create dummy variable for sex: male ($m_i$). We will also include interaction term between age (years) and $m_i$.
+
+Linear Model we will fit: 
+
+$$\mu_i = \beta_0 + \beta_1 (x_i -\bar{x}) + \beta_2 m_i + \beta_3 (m_i (x_i -\bar{x}))$$
+
+
+Prior: Our prior for average HbA1c level in the population is below 5.7%. 
+- $\beta_0 \sim \mathcal{Normal}(5.5,0.5)$: Intercept for women
+- $\beta_1 \sim \mathcal{Normal}(0.01,0.05)$: Women’s slope
+- $\beta_2 \sim \mathcal{Normal}(0.11,0.05)$: Intercept difference
+- $\beta_3 \sim \mathcal{Normal}(0,0.05)$: Slope difference
+
+```{r Prior predictive check}
+# ── Setup ──────────────────────────────────────────────────────────────
+n_obs    <- nrow(d)
+xbar     <- mean(d$RIDAGEYR)
+x_centered <- d$RIDAGEYR - xbar
+
+# ── Prior predictive check (log-normal model with elevated covariate) ──
+nsim <- 200
+
+# Priors on LOG scale
+# Check log scale first
+cat("mean(log(HbA1c)):", mean(log(d$LBXGH)), "\n")
+cat("sd(log(HbA1c)):",   sd(log(d$LBXGH)),   "\n")
+
+# ── Informed priors from data diagnostics ──────────────────────────────
+# mean(log(HbA1c)) normal group  = 1.656
+# mean(log(HbA1c)) elevated group = 1.865
+# sd(log(HbA1c)) overall          = 0.149
+# So sigma on log scale ~ 0.10-0.15 within groups
+
+nsim <- 200
+
+beta0_prior <- rnorm(nsim, mean = 1.7, sd = 0.05)   # normal group intercept (log scale)
+beta1_prior <- rnorm(nsim, mean = 0.003, sd = 0.003)   # age slope (log scale)
+beta2_prior <- rnorm(nsim, mean = 0.01,  sd = 0.005)   # sex offset (log scale)
+beta3_prior <- rnorm(nsim, mean = 0,     sd = 0.003)   # interaction
+sigma_prior <- runif(nsim, min = 0, max = 0.1)   # sd of log hb1ac - 0.6 
+
+ynew_log <- matrix(nrow = n_obs, ncol = nsim)
+
+for(j in 1:nsim) {
+  ynew_log[, j] <- exp(rnorm(n_obs, 
+          mean = beta0_prior[j] +
+          beta1_prior[j] * x_centered +
+          beta2_prior[j] * d$male +
+          beta3_prior[j] * d$male * x_centered, 
+          sd = sigma_prior[j]))
+}
+
+
+# ── Reshape for ggplot ─────────────────────────────────────────────────
+ynew_df <- as.data.frame(ynew_log)
+ynew_df$id <- 1:nrow(ynew_df)
+ynew_long <- reshape(ynew_df,
+                     direction = "long",
+                     idvar     = "id",
+                     varying   = list(1:nsim),
+                     timevar   = "simulation",
+                     v.names   = "HbA1c",
+                     times     = 1:nsim)
+rownames(ynew_long) <- NULL
+
+# ── Plot ───────────────────────────────────────────────────────────────
+ggplot() +
+  geom_line(
+    data  = ynew_long,
+    aes(x = HbA1c, group = simulation),
+    stat  = "density",
+    color = "lightblue",
+    alpha = 0.5
+  ) +
+  geom_density(
+    data      = d,
+    aes(x     = LBXGH),
+    color     = "black",
+    linewidth = 1.5
+  ) +
+  coord_cartesian(xlim = c(3, 15), ylim = c(0, 1.5)) +
+  theme_minimal() +
+  labs(
+    title    = "Prior Predictive Check: Log-Normal Model \nexcluding individuals with reported diabetes diagnosis",
+    subtitle = "Black line = Actual Data | Blue lines = Simulated Datasets",
+    x        = "HbA1c (%)",
+    y        = "Density"
+  )
+
+
+
+```
+
+JAGS model 
+```{r JAGS model}
+model_code_interaction <- "model{
+  # --- LIKELIHOOD ---
+  for(i in 1:n){
+    y[i] ~ dnorm(mu[i], tau) 
+    
+    # Linear predictor with interaction
+    mu[i] <- beta0 + beta1 * (x[i] - xbar) + beta2 * m[i] + beta3 * m[i] * (x[i] - xbar)
+    
+    # Posterior Predictive
+    ynew[i] ~ dnorm(mu[i], tau)
+  }
+ 
+  # --- PRIORS ---
+  sigma ~ dunif(0, 0.1)
+  tau    <- pow(sigma, -2)
+  
+  # Note: JAGS dnorm uses Precisions = 1/Variance
+  beta0 ~ dnorm(1.7, pow(0.05, -2))
+  beta1 ~ dnorm(0.003, pow(0.003, -2))
+  beta2 ~ dnorm(0.01, pow(0.005, -2))
+  beta3 ~ dnorm(0, pow(0.003, -2))
+  
+  # Generated Quantities: Calculate Men-specific parameters directly inside JAGS
+  beta0_m <- beta0 + beta2
+  beta1_m <- beta1 + beta3
+}"
+
+data_list_int <- list(
+  y = log(d$LBXGH), 
+  x = d$RIDAGEYR, 
+  m = d$male, 
+  xbar = xbar, 
+  n = n_obs
+)
+
+m4 <- jags.model(textConnection(model_code_interaction), 
+                 data = data_list_int, 
+                 n.chains = 3,
+                 quiet = TRUE)
+
+# Monitor both sigmas
+samples_int <- coda.samples(
+  m4,
+  variable.names = c("beta0", "beta1", "beta2", "beta3", 
+                     "beta0_m", "beta1_m", "sigma"),
+  n.iter = 10000
+)
+
+
+samps_int_df <- as.data.frame(samples_int[[1]])
+
+# Display summary of all beta coefficients
+# precis(samps_int_df, prob = 0.95, digits = 2)
+exp_summary <- data.frame(
+  parameter = names(samps_int_df),
+  exp_mean  = round(colMeans(exp(samps_int_df)), 4),
+  exp_lo    = round(apply(exp(samps_int_df), 2, quantile, 0.025), 4),
+  exp_hi    = round(apply(exp(samps_int_df), 2, quantile, 0.975), 4)
+)
+print(exp_summary)
+
+HPDinterval(as.mcmc(samps_int_df), prob = 0.95)
+
+```
+
+
+Posterior predictive check
+```{r Posterior predictive check}
+
+# Draw posterior predictive samples from the fitted JAGS model
+samples_pred <- jags.samples(
+  model = m4,
+  variable.names = c("ynew", "mu"),
+  n.iter = 1000
+)
+
+# Check dimensions
+dim(samples_pred$ynew)
+
+# Extract posterior predictive array
+ynew_array <- samples_pred$ynew
+
+# Combine iterations across chains
+ynew_mat <- do.call(
+  cbind,
+  lapply(1:dim(ynew_array)[3], function(ch) ynew_array[, , ch])
+)
+
+# Extract posterior mean array if needed later
+mu_array <- samples_pred$mu
+mu_mat <- do.call(
+  cbind,
+  lapply(1:dim(mu_array)[3], function(ch) mu_array[, , ch])
+)
+
+# Check final dimensions
+dim(ynew_mat)
+dim(mu_mat)
+
+ynew_mat_original <- exp(ynew_mat) 
+
+
+## 2. Density overlay PPC   ## Lecture 12
+set.seed(123)
+
+# Number of posterior predictive datasets to show
+n_show <- 100
+idx <- sample(1:ncol(ynew_mat_original), n_show)
+
+# Observed HbA1c density
+plot(
+  density(d$LBXGH),
+  col = "black",
+  lwd = 2,
+  xlab = "HbA1c (%)",
+  ylab = "Density",
+  main = "Posterior Predictive Check: HbA1c Distribution\n excluding individuals with reported diabetes diagnosis",
+  xlim = c(3, 18),
+  ylim = c(0, 1)
+)
+
+# Overlay posterior predictive densities
+for (s in idx) {
+  y_rep <- ynew_mat_original[, s]
+  y_rep <- y_rep[is.finite(y_rep)]
+ 
+  # Defensive coding: skip if no variation
+  if (length(unique(y_rep)) < 2) next
+ 
+  dens <- tryCatch(
+    density(y_rep),
+    error = function(e) NULL
+  )
+ 
+  if (!is.null(dens)) {
+    lines(
+      dens,
+      col = adjustcolor("skyblue", alpha.f = 0.12),
+      lwd = 1
+    )
+  }
+}
+
+# Add observed density
+lines(density(d$LBXGH), col = "black", lwd = 2)
+
+legend(
+  "topright",
+  legend = c("Observed HbA1c", "Posterior predictive draws"),
+  col = c("black", adjustcolor("skyblue", alpha.f = 0.6)),
+  lwd = c(2, 1),
+  bty = "n"
+)
+
+# Observed summary statistics
+obs_mean <- mean(d$LBXGH)
+obs_sd <- sd(d$LBXGH)
+obs_above57 <- mean(d$LBXGH >= 5.7)
+obs_above65 <- mean(d$LBXGH >= 6.5)
+
+# Posterior predictive summary statistics
+rep_means <- apply(ynew_mat_original, 2, mean)
+rep_sds <- apply(ynew_mat_original, 2, sd)
+rep_above57 <- apply(ynew_mat_original, 2, function(x) mean(x >= 5.7))
+rep_above65 <- apply(ynew_mat_original, 2, function(x) mean(x >= 6.5))
+
+# Create summary table
+ppc_table <- data.frame(
+  Statistic = c(
+    "Mean HbA1c",
+    "SD HbA1c",
+    "Proportion HbA1c >= 5.7%",
+    "Proportion HbA1c >= 6.5%"
+  ),
+  Observed = c(
+    obs_mean,
+    obs_sd,
+    obs_above57,
+    obs_above65
+  ),
+  PPC_lower_2.5 = c(
+    quantile(rep_means, 0.025),
+    quantile(rep_sds, 0.025),
+    quantile(rep_above57, 0.025),
+    quantile(rep_above65, 0.025)
+  ),
+  PPC_median = c(
+    quantile(rep_means, 0.5),
+    quantile(rep_sds, 0.5),
+    quantile(rep_above57, 0.5),
+    quantile(rep_above65, 0.5)
+  ),
+  PPC_upper_97.5 = c(
+    quantile(rep_means, 0.975),
+    quantile(rep_sds, 0.975),
+    quantile(rep_above57, 0.975),
+    quantile(rep_above65, 0.975)
+  )
+)
+
+ppc_table %>%
+  mutate(across(where(is.numeric), ~ round(.x, 3)))
+
+# Check posterior predictive draws for HbA1c values
+rep_negative <- apply(ynew_mat_original, 2, function(x) mean(x < 0))
+rep_extreme_high <- apply(ynew_mat_original, 2, function(x) mean(x > 18))
+
+cat("Average posterior predictive proportion with HbA1c < 0:",
+    round(mean(rep_negative), 5), "\n")
+
+cat("Average posterior predictive proportion with HbA1c > 18:",
+    round(mean(rep_extreme_high), 5), "\n")
+```
+
+MCMC Diagnostics 
+```{r MCMC Diagnositcs}
+# Trace plots
+plot(samples_int, density = FALSE, main = "")
+
+# Gelman-Rubin diagnostic: R-hat
+gelman.diag(samples_int)$psrf
+
+# Effective sample size
+effectiveSize(samples_int)
+
+```
