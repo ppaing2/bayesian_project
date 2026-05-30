@@ -35,9 +35,12 @@ https://wwwn.cdc.gov/nchs/nhanes/continuousnhanes/default.aspx?Cycle=2021-2023
 ## Read datasets
 a1c <- read_xpt("GHB_L.xpt")
 demo <- read_xpt("DEMO_L.xpt")
+diq <- read_xpt("DIQ_L.xpt")
 
 # merge datasets
 nhanes <- merge(a1c, demo, by = "SEQN", all = TRUE)
+nhanes <- merge(nhanes, diq, by = "SEQN", all = TRUE)
+
 d <- setDT(nhanes)
 
 # Limit the dataset to 12+ years old because HbA1c is measured 12+ years and complete obs of A1c
@@ -46,6 +49,7 @@ summary(d$LBXGH)
 
 # Create dummy variable for male
 d$male <- ifelse(d$RIAGENDR == 1, 1, 0)
+
 ```
 
 Prior predictive check
@@ -63,61 +67,83 @@ Prior: Our prior for average HbA1c level in the population is below 5.7%.
 - $\beta_3 \sim \mathcal{Normal}(0,0.05)$: Slope difference
 
 ```{r Prior predictive check}
-n_obs <- nrow(d)
-xbar <- mean(d$RIDAGEYR)
+# ── Setup ──────────────────────────────────────────────────────────────
+n_obs    <- nrow(d)
+xbar     <- mean(d$RIDAGEYR)
 x_centered <- d$RIDAGEYR - xbar
-x_range <- range(x_centered)
 
-
-# Number of simulations
+# ── Prior predictive check (log-normal model with elevated covariate) ──
 nsim <- 200
 
-# 1. Simulate parameters from our priors
-beta0_prior <- rnorm(nsim, mean = 5.5, sd = 0.5)
-beta1_prior <- rnorm(nsim, mean = 0.01, sd = 0.05)
-beta2_prior <- rnorm(nsim, mean = 0.11, sd = 0.05)
-beta3_prior <- rnorm(nsim, mean = 0, sd = 0.05)
-sigma_prior <- runif(nsim, min = 0, max = 0.1) # we have not discussed sigma yet
+# Priors on LOG scale
+# Check log scale first
+cat("mean(log(HbA1c)):", mean(log(d$LBXGH)), "\n")
+cat("sd(log(HbA1c)):",   sd(log(d$LBXGH)),   "\n")
 
-# 3. Simulate full datasets from the prior (one dataset per draw)
-ynew <- matrix(nrow = n_obs, ncol = nsim)
+# ── Informed priors from data diagnostics ──────────────────────────────
+# mean(log(HbA1c)) normal group  = 1.656
+# mean(log(HbA1c)) elevated group = 1.865
+# sd(log(HbA1c)) overall          = 0.149
+# So sigma on log scale ~ 0.10-0.15 within groups
+
+nsim <- 200
+
+beta0_prior <- rnorm(nsim, mean = 1.7, sd = 0.05)   # log-normal group intercept
+beta1_prior <- rnorm(nsim, mean = 0.003, sd = 0.003)   # age slope (log scale)
+beta2_prior <- rnorm(nsim, mean = 0.01,  sd = 0.005)   # sex offset (log scale)
+beta3_prior <- rnorm(nsim, mean = 0,     sd = 0.003)   # interaction
+sigma_prior <- runif(nsim, min = 0, max = 0.1)   # sd of hb1ac - 0.6 
+
+ynew_log <- matrix(nrow = n_obs, ncol = nsim)
 
 for(j in 1:nsim) {
-  ynew[, j] <- rnorm(n_obs, mean = beta0_prior[j] + beta1_prior[j] * x_centered + beta2_prior[j]* d$male + beta3_prior[j]*d$male*x_centered, sd = sigma_prior[j])
+  ynew_log[, j] <- exp(rnorm(n_obs, 
+          mean = beta0_prior[j] +
+          beta1_prior[j] * x_centered +
+          beta2_prior[j] * d$male +
+          beta3_prior[j] * d$male * x_centered, 
+          sd = sigma_prior[j]))
 }
 
-ynew_df <- as.data.frame(ynew)
+
+# ── Reshape for ggplot ─────────────────────────────────────────────────
+ynew_df <- as.data.frame(ynew_log)
 ynew_df$id <- 1:nrow(ynew_df)
-ynew_long <- reshape(ynew_df, direction = "long", idvar = "id",
-                     varying = list(1:nsim), timevar = "simulation",
-                     v.names = "HbA1c", times = 1:nsim)
+ynew_long <- reshape(ynew_df,
+                     direction = "long",
+                     idvar     = "id",
+                     varying   = list(1:nsim),
+                     timevar   = "simulation",
+                     v.names   = "HbA1c",
+                     times     = 1:nsim)
 rownames(ynew_long) <- NULL
 
-
-# 3. Visualize the Prior Predictive Distribution
-# Plot the predictive check
-plot(NULL, xlim = x_range, ylim = c(0,20),
-     xlab = "Centered Age", ylab = "HbA1C",
-     main = "Implied Prior Regression Lines")
-
-# for (i in 1:nsim){
-#   curve(beta0_prior[i] + beta1_prior[i] * x + beta2_prior[i]* d$male + beta3_prior[i]*d$male*x,
-#         from = x_range[1], to = x_range[2],
-#         add = TRUE, col = adjustcolor("black", alpha.f = 0.2))
-#   
-# }
-
-
+# ── Plot ───────────────────────────────────────────────────────────────
 ggplot() +
-  # 200 simulated datasets
-  geom_line(data = ynew_long, aes(x = HbA1c, group = simulation), stat = "density", color = "lightblue", alpha = 0.9) +
-  # Actual observed data
-  geom_density(data = d, aes(x = LBXGH), color = "black", linewidth = 1.2) +
-  coord_cartesian(ylim = c(0, 0.7))+
+  geom_line(
+    data  = ynew_long,
+    aes(x = HbA1c, group = simulation),
+    stat  = "density",
+    color = "lightblue",
+    alpha = 0.5
+  ) +
+  geom_density(
+    data      = d,
+    aes(x     = LBXGH),
+    color     = "black",
+    linewidth = 1.5
+  ) +
+  coord_cartesian(xlim = c(3, 15), ylim = c(0, 1.5)) +
   theme_minimal() +
-  labs(title = "Prior Predictive Check: Intercept-Only Model",
-       subtitle = "Black line = Actual Data | Blue lines = Simulated Datasets",
-       x = "HbA1c", y = "Density")
+  labs(
+    title    = "Prior Predictive Check: Log-Normal Model",
+    subtitle = "Black line = Actual Data | Blue lines = Simulated Datasets",
+    x        = "HbA1c (%)",
+    y        = "Density"
+  )
+
+
+
 ```
 
 JAGS model 
@@ -139,10 +165,10 @@ model_code_interaction <- "model{
   tau    <- pow(sigma, -2)
   
   # Note: JAGS dnorm uses Precisions = 1/Variance
-  beta0 ~ dnorm(5.5, pow(0.5, -2))
-  beta1 ~ dnorm(0.01, pow(0.05, -2))
-  beta2 ~ dnorm(0.11, pow(0.05, -2))
-  beta3 ~ dnorm(0, pow(0.05, -2))
+  beta0 ~ dnorm(1.7, pow(0.05, -2))
+  beta1 ~ dnorm(0.003, pow(0.003, -2))
+  beta2 ~ dnorm(0.01, pow(0.005, -2))
+  beta3 ~ dnorm(0, pow(0.003, -2))
   
   # Generated Quantities: Calculate Men-specific parameters directly inside JAGS
   beta0_m <- beta0 + beta2
@@ -150,7 +176,7 @@ model_code_interaction <- "model{
 }"
 
 data_list_int <- list(
-  y = d$LBXGH, 
+  y = log(d$LBXGH), 
   x = d$RIDAGEYR, 
   m = d$male, 
   xbar = xbar, 
@@ -162,18 +188,74 @@ m4 <- jags.model(textConnection(model_code_interaction),
                  n.chains = 3,
                  quiet = TRUE)
 
+# Burn-in
+update(m4, n.iter = 2000)
+
 samples_int <- coda.samples(
-  m4, 
-  variable.names = c("beta0", "beta1", "beta2", "beta3", "beta0_m", "beta1_m", "sigma"), 
+  m4,
+  variable.names = c("beta0", "beta1", "beta2", "beta3", 
+                     "beta0_m", "beta1_m", "sigma"),
   n.iter = 10000
 )
 
 samps_int_df <- as.data.frame(samples_int[[1]])
 
-# Display summary of all beta coefficients
-precis(samps_int_df, prob = 0.95, digits = 2)
+beta_cols  <- grep("^beta",  names(samps_int_df), value = TRUE)
+sigma_cols <- grep("^sigma", names(samps_int_df), value = TRUE)
 
+exp_hpd   <- HPDinterval(as.mcmc(exp(samps_int_df[, beta_cols])), prob = 0.95)
+sigma_hpd <- HPDinterval(as.mcmc(samps_int_df[, sigma_cols, drop = FALSE]), prob = 0.95)
 
+exp_summary <- data.frame(
+  parameter = beta_cols,
+  exp_mean  = round(colMeans(exp(samps_int_df[, beta_cols])), 4),
+  exp_lo    = round(exp_hpd[, "lower"], 4),
+  exp_hi    = round(exp_hpd[, "upper"], 4)
+)
+
+sigma_summary <- data.frame(
+  parameter = sigma_cols,
+  exp_mean  = round(colMeans(samps_int_df[, sigma_cols, drop = FALSE]), 4),
+  exp_lo    = round(sigma_hpd[, "lower"], 4),
+  exp_hi    = round(sigma_hpd[, "upper"], 4)
+)
+
+full_summary <- rbind(exp_summary, sigma_summary)
+print(full_summary)
+
+# Bias correction term 
+bias <- 0.5 * samps_int_df$sigma^2
+
+corrected <- data.frame(
+  beta0_corrected   = exp(samps_int_df$beta0   + bias),
+  beta0_m_corrected = exp(samps_int_df$beta0_m + bias),
+  beta1_corrected   = exp(samps_int_df$beta1   + bias),
+  beta1_m_corrected = exp(samps_int_df$beta1_m + bias),
+  beta2_corrected   = exp(samps_int_df$beta2   + bias),
+  beta3_corrected   = exp(samps_int_df$beta3   + bias),
+  sigma             = samps_int_df$sigma
+)
+
+# HPD intervals 
+hpd <- HPDinterval(as.mcmc(corrected), prob = 0.95)
+
+# Equal-tail intervals 
+ci_lo <- apply(corrected, 2, quantile, 0.025)
+ci_hi <- apply(corrected, 2, quantile, 0.975)
+
+# Combined summary table 
+corrected_summary <- data.frame(
+  parameter = rownames(hpd),
+  post_mean = round(colMeans(corrected), 4),
+  # HPD
+  hpd_lower = round(hpd[, "lower"], 4),
+  hpd_upper = round(hpd[, "upper"], 4),
+  # Equal-tail
+  ci_lower  = round(ci_lo, 4),
+  ci_upper  = round(ci_hi, 4)
+)
+
+print(corrected_summary)
 ```
 
 
@@ -210,12 +292,15 @@ mu_mat <- do.call(
 dim(ynew_mat)
 dim(mu_mat)
 
+ynew_mat_original <- exp(ynew_mat) 
+
+
 ## 2. Density overlay PPC   ## Lecture 12
 set.seed(123)
 
 # Number of posterior predictive datasets to show
 n_show <- 100
-idx <- sample(1:ncol(ynew_mat), n_show)
+idx <- sample(1:ncol(ynew_mat_original), n_show)
 
 # Observed HbA1c density
 plot(
@@ -231,7 +316,7 @@ plot(
 
 # Overlay posterior predictive densities
 for (s in idx) {
-  y_rep <- ynew_mat[, s]
+  y_rep <- ynew_mat_original[, s]
   y_rep <- y_rep[is.finite(y_rep)]
  
   # Defensive coding: skip if no variation
@@ -269,10 +354,10 @@ obs_above57 <- mean(d$LBXGH >= 5.7)
 obs_above65 <- mean(d$LBXGH >= 6.5)
 
 # Posterior predictive summary statistics
-rep_means <- apply(ynew_mat, 2, mean)
-rep_sds <- apply(ynew_mat, 2, sd)
-rep_above57 <- apply(ynew_mat, 2, function(x) mean(x >= 5.7))
-rep_above65 <- apply(ynew_mat, 2, function(x) mean(x >= 6.5))
+rep_means <- apply(ynew_mat_original, 2, mean)
+rep_sds <- apply(ynew_mat_original, 2, sd)
+rep_above57 <- apply(ynew_mat_original, 2, function(x) mean(x >= 5.7))
+rep_above65 <- apply(ynew_mat_original, 2, function(x) mean(x >= 6.5))
 
 # Create summary table
 ppc_table <- data.frame(
@@ -312,8 +397,8 @@ ppc_table %>%
   mutate(across(where(is.numeric), ~ round(.x, 3)))
 
 # Check posterior predictive draws for HbA1c values
-rep_negative <- apply(ynew_mat, 2, function(x) mean(x < 0))
-rep_extreme_high <- apply(ynew_mat, 2, function(x) mean(x > 18))
+rep_negative <- apply(ynew_mat_original, 2, function(x) mean(x < 0))
+rep_extreme_high <- apply(ynew_mat_original, 2, function(x) mean(x > 18))
 
 cat("Average posterior predictive proportion with HbA1c < 0:",
     round(mean(rep_negative), 5), "\n")
@@ -328,7 +413,7 @@ MCMC Diagnostics
 plot(samples_int, density = FALSE, main = "")
 
 # Gelman-Rubin diagnostic: R-hat
-gelman.diag(samples_int)$psrf
+gelman.diag(samples_int[, c("beta0", "beta1", "beta2", "beta3", "sigma")])$psrf
 
 # Effective sample size
 effectiveSize(samples_int)
