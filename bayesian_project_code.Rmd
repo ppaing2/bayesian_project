@@ -228,11 +228,11 @@ bias <- 0.5 * samps_int_df$sigma^2
 
 corrected <- data.frame(
   beta0_corrected   = exp(samps_int_df$beta0   + bias),
-  beta0_m_corrected = exp(samps_int_df$beta0_m + bias),
-  beta1_corrected   = exp(samps_int_df$beta1   + bias),
-  beta1_m_corrected = exp(samps_int_df$beta1_m + bias),
-  beta2_corrected   = exp(samps_int_df$beta2   + bias),
-  beta3_corrected   = exp(samps_int_df$beta3   + bias),
+  beta0_m = exp(samps_int_df$beta0_m),
+  beta1   = exp(samps_int_df$beta1),
+  beta1_m = exp(samps_int_df$beta1_m),
+  beta2   = exp(samps_int_df$beta2),
+  beta3   = exp(samps_int_df$beta3),
   sigma             = samps_int_df$sigma
 )
 
