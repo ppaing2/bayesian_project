@@ -90,7 +90,7 @@ beta0_prior <- rnorm(nsim, mean = 5.5, sd = 0.5)
 beta1_prior <- rnorm(nsim, mean = 0.01, sd = 0.05)
 beta2_prior <- rnorm(nsim, mean = 0.11, sd = 0.05)
 beta3_prior <- rnorm(nsim, mean = 0, sd = 0.05)
-sigma_prior <- runif(nsim, min = 0, max = 0.1) # we have not discussed sigma yet
+sigma_prior <- runif(nsim, min = 0, max = 1) # we have not discussed sigma yet
 
 # 3. Simulate full datasets from the prior (one dataset per draw)
 ynew <- matrix(nrow = n_obs, ncol = nsim)
@@ -125,8 +125,8 @@ ggplot() +
   # 200 simulated datasets
   geom_line(data = ynew_long, aes(x = HbA1c, group = simulation), stat = "density", color = "lightblue", alpha = 0.9) +
   # Actual observed data
-  geom_density(data = d, aes(x = LBXGH), color = "black", linewidth = 1.2) +
-  coord_cartesian(ylim = c(0, 0.7))+
+  geom_density(data = d, aes(x = LBXGH), color = "black", linewidth = 1.6) +
+  coord_cartesian(ylim = c(0, 1.6))+
   theme_minimal() +
   labs(title = "Prior Predictive Check: Intercept-Only Model",
        subtitle = "Black line = Actual Data | Blue lines = Simulated Datasets",
@@ -148,7 +148,7 @@ model_code_interaction <- "model{
   }
  
   # --- PRIORS ---
-  sigma ~ dunif(0, 0.1)
+  sigma ~ dunif(0, 1)
   tau    <- pow(sigma, -2)
   
   # Note: JAGS dnorm uses Precisions = 1/Variance
